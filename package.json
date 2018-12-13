@@ -1,8 +1,8 @@
 {
-  "name": "datatables-query",
-  "version": "0.2.0",
-  "description": "A module for doing MongoDB pagination and search, based on DataTables query model. Relies on Express and Mongoose.",
-  "repository": "https://github.com/fiddus/datatables-query.git",
+  "name": "datatables-query-parse",
+  "version": "0.1.0",
+  "description": "A module for doing Parse Server pagination and search, based on DataTables query model.",
+  "repository": "https://github.com/ibrba/datatables-query-parse.git",
   "main": "index.js",
   "scripts": {
     "test": "mocha"
@@ -10,14 +10,13 @@
   "keywords": [
     "datatables",
     "pagination",
-    "mongoose",
-    "MongoDB",
-    "Express",
+    "parse",
+    "Parse Server",
+    "parse.com",
     "node",
-    "nodejs",
-    "expressjs"
+    "nodejs"
   ],
-  "author": "Vinicius Teixeira",
+  "author": "Ibrahima BA",
   "license": "MIT",
   "dependencies": {
     "async": "^1.4.2"

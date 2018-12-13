@@ -3,6 +3,115 @@
 var async = require('async'),
 
     /**
+     * Method parseRequest
+     * Builds a JSON Object from not good formatted Datatables params
+     * - If  we have in input this:
+     * ```
+                { draw: '1',
+                'columns[0][data]': 'id',
+                'columns[0][name]': '',
+                'columns[0][searchable]': 'true',
+                'columns[0][orderable]': 'true',
+                'columns[0][search][value]': '',
+                'columns[0][search][regex]': 'false',
+                'columns[1][data]': 'name',
+                'columns[1][name]': '',
+                'columns[1][searchable]': 'true',
+                'columns[1][orderable]': 'true',
+                'columns[1][search][value]': '',
+                'columns[1][search][regex]': 'false',
+                'order[0][column]': '0',
+                'order[0][dir]': 'asc',
+                 start: '0',
+                 length: '2',
+                'search[value]': '',
+                'search[regex]': 'false' }
+     * ```
+     *  - The output will be : 
+      * ```
+      *  { draw: '1',
+            start: '0',
+            length: '2',
+            columns:
+                    [ { 
+                        data: 'id',
+                        name: '',
+                        searchable: 'true',
+                        orderable: 'true',
+                        search: { value: '', regex: 'false' }  
+                        },
+                        { 
+                        data: 'name',
+                        name: '',
+                        searchable: 'true',
+                        orderable: 'true',
+                        search: { value: '', regex: 'false' } 
+                        }
+                    ],
+            order: [ { column: '0', dir: 'asc' } ],
+            search: { value: '', regex: 'false' } }
+     * ```
+     * @param params DataTable params that are not object like
+     * @returns  {Object} params DataTable params object
+     */
+    parseRequest = function(params) {
+        console.log(params)
+        if (!params) {
+            return params;
+        }
+
+        var keys = Object.keys(params),
+            columns = [],
+            order = [],
+            search = {},
+            results ={};
+        keys.forEach(key => {
+            var regexColumn = /^columns\[([0-9]+)\]\[(.+)\]/;
+            var test=  regexColumn.test(key)
+            if(test)
+            {
+                var index  = key.replace(regexColumn, '$1');
+                var field  = key.replace(regexColumn, '$2');
+                var fields = field.split("][")
+                if(!columns[index]) columns[index]= {};
+                if(fields && fields.length==2){
+                    if(!columns[index][fields[0]]) columns[index][fields[0]] = {}
+                    columns[index][fields[0]][fields[1]] = params[key]
+                }else{
+                    columns[index][field] = params[key]
+                }
+            }else{
+                var regexOrder = /^order\[([0-9]+)\]\[(.+)\]/;
+                test=  regexOrder.test(key)
+                if(test)
+                {
+                    var index  = key.replace(regexOrder, '$1');
+                    var field  = key.replace(regexOrder, '$2');
+                    
+                    if(!order[index]) order[index]= {};
+                    order[index][field] = params[key]
+                }else{
+                    var regexSearch = /^search\[(.+)\]/;
+                    test=  regexSearch.test(key)
+                    if(test)
+                    {
+                        var field  = key.replace(regexSearch, '$1');
+                        search[field] = params[key]
+                    } else{
+                        results[key] = params[key];
+                    }
+                } 
+            }
+        });
+        results['columns'] = columns;
+        results['order'] = order;
+        results['search'] =  search;
+        console.log(results)
+        return results;
+
+    },
+
+    /**
      * Method getSearchableFields
      * Returns an array of fieldNames based on DataTable params object
      * All columns in params.columns that have .searchable == true field will have the .data param returned in an String
@@ -34,21 +143,7 @@ var async = require('async'),
 
     /**
      * Methdd buildFindParameters
-     * Builds a MongoDB find expression based on DataTables param object
-     * - If no search text if provided (in params.search.value) an empty object is returned, meaning all data in DB will
-     * be returned.
-     * - If only one column is searchable (that means, only one params.columns[i].searchable equals true) a normal one
-     * field regex MongoDB query is returned, that is {`fieldName`: new Regex(params.search.value, 'i'}
-     * - If multiple columns are searchable, an $or MongoDB is returned, that is:
-     * ```
-     * {
-     *     $or: [
-     *         {`searchableField1`: new Regex(params.search.value, 'i')},
-     *         {`searchableField2`: new Regex(params.search.value, 'i')}
-     *     ]
-     * }
-     * ```
-     * and so on.<br>
+     * Builds a find expression based on DataTables param object
      * All search are by regex so the field param.search.regex is ignored.
      * @param params DataTable params object
      * @returns {*}
@@ -56,11 +151,13 @@ var async = require('async'),
     buildFindParameters = function (params) {
 
         if (!params || !params.columns || !params.search || (!params.search.value && params.search.value !== '')) {
+            console.log("find Null", params,params.columns)
+
             return null;
         }
 
         var searchText = params.search.value,
-            findParameters = {},
+            findParameters = [],
             searchRegex,
             searchOrArray = [];
 
@@ -68,29 +165,45 @@ var async = require('async'),
             return findParameters;
         }
 
-        searchRegex = new RegExp(searchText, 'i');
-
         var searchableFields = getSearchableFields(params);
 
         if (searchableFields.length === 1) {
-            findParameters[searchableFields[0]] = searchRegex;
+            obj = {};
+            obj[searchableFields[0]] = searchText
+            findParameters.push(obj);
             return findParameters;
         }
 
         searchableFields.forEach(function (field) {
             var orCondition = {};
-            orCondition[field] = searchRegex;
+            orCondition[field] = searchText;
             searchOrArray.push(orCondition);
         });
 
-        findParameters.$or = searchOrArray;
+        findParameters = searchOrArray;
 
         return findParameters;
     },
 
+        /**
+     * Method orQueries
+     * Created an array of Parse queries from the findParameters that we have to do the search
+     * @param params
+     * @returns {Parse.Query}
+     */
+
+    orQueries  =  function(params){
+        return params.map(param => {
+            var query = new Parse.Query(ModelName);
+            var field  = Object.keys(param)[0];
+            query.fullText(field,param[field], {caseSensitive : false});
+            return query;
+        });
+    }, 
+
     /**
      * Method buildSortParameters
-     * Based on DataTable parameters, this method returns a MongoDB ordering parameter for the appropriate field
+     * Based on DataTable parameters, this method returns an ordering parameter for the appropriate field
      * The params object must contain the following properties:
      * order: Array containing a single object
      * order[0].column: A string parseable to an Integer, that references the column index of the reference field
@@ -104,6 +217,7 @@ var async = require('async'),
      */
     buildSortParameters = function (params) {
         if (!params || !Array.isArray(params.order) || params.order.length === 0) {
+            console.log("sort Null", params)
             return null;
         }
 
@@ -135,34 +249,34 @@ var async = require('async'),
     buildSelectParameters = function (params) {
 
         if (!params || !params.columns || !Array.isArray(params.columns)) {
+            console.log("select Null", params)
             return null;
         }
 
         return params
             .columns
-            .map(col => col.data)
-            .reduce((selectParams, field) => {
-                selectParams[field] = 1;
-                return selectParams;
-            }, {});
+            .map(col => col.data);
     },
 
     /**
      * Run wrapper function
-     * Serves only to the Model parameter in the wrapped run function's scope
-     * @param {Object} Model Mongoose Model Object, target of the search
+     * Serves only to the ModelName parameter in the wrapped run function's scope
+     * @param {String} ModelName The Parse model class(column) name, target of the search
      * @returns {Function} the actual run function with Model in its scope
      */
-    run = function (Model) {
+    
+    run = function (ModelName) {
 
+        var ParseModel = Parse.Object.extend(ModelName);
+        
         /**
          * Method Run
          * The actual run function
-         * Performs the query on the passed Model object, using the DataTable params argument
+         * Performs the query on the passed ModelName class, using the DataTable params argument
          * @param {Object} params DataTable params object
          */
         return function (params) {
-
+                params = parseRequest(params)
             var draw = Number(params.draw),
                 start = Number(params.start),
                 length = Number(params.length),
@@ -173,6 +287,7 @@ var async = require('async'),
                 recordsFiltered;
 
             return new Promise(function (fullfill, reject) {
+                var queries = orQueries(findParameters);
 
                 async.series([
                     function checkParams (cb) {
@@ -187,42 +302,56 @@ var async = require('async'),
                         cb();
                     },
                     function fetchRecordsTotal (cb) {
-                        Model.count({}, function (err, count) {
-                            if (err) {
-                                return cb(err);
-                            }
+                        
+                        var query = new Parse.Query(ModelName);
+                        console.log("fetchRecordsTotal")
+                        query.count().then(function (count) {
                             recordsTotal = count;
                             cb();
+                        }).catch(function (err) {
+                                console.log("fetchRecordsTotal",err)
+                                return cb(err);
                         });
                     },
                     function fetchRecordsFiltered (cb) {
-                        Model.count(findParameters, function (err, count) {
-                            if (err) {
-                                return cb(err);
-                            }
+                        var query = new Parse.Query(ModelName);
+                        if(queries && queries.length){
+                            query = query._orQuery(queries)
+                        }
+                        query.count().then(function (count) {
+                            
                             recordsFiltered = count;
                             cb();
+                        }).catch(function (err) {
+                            return cb(err);
                         });
                     },
                     function runQuery (cb) {
-                        Model
-                            .find(findParameters)
+                        var query = new Parse.Query(ModelName);
+                        if(queries && queries.length){
+                            query = query._orQuery(queries)
+                        }
+
+                        query = query
                             .select(selectParameters)
                             .limit(length)
-                            .skip(start)
-                            .sort(sortParameters)
-                            .exec(function (err, results) {
-                                if (err) {
-                                    return cb(err);
-                                }
-                                cb(null, {
-                                    draw: draw,
-                                    recordsTotal: recordsTotal,
-                                    recordsFiltered: recordsFiltered,
-                                    data: results
-                                });
+                            .skip(start);
+                        if(sortParameters && sortParameters.charAt(0)==='-') {
+                            query = query.descending(sortParameters.substring(1))
+                        } else {
+                            query = query.ascending(sortParameters)
+                        }
+                        query.find().then(function (results) {
+                            cb(null, {
+                                draw: draw,
+                                recordsTotal: recordsTotal,
+                                recordsFiltered: recordsFiltered,
+                                data: results
                             });
-
+                        }).catch(function (err) {
+                            return cb(err);
+                        });
+                        
                     }
                 ], function resolve (err, results) {
                     if (err) {
@@ -239,17 +368,17 @@ var async = require('async'),
     },
 
     /**
-     * Module datatablesQuery
-     * Performs queries in the given Mongoose Model object, following DataTables conventions for search and
+     * Module datatablesQueryParse
+     * Performs queries in the given Parse Model class, following DataTables conventions for search and
      * pagination.
      * The only interesting exported function is `run`. The others are exported only to allow unit testing.
      * @param Model
      * @returns {{run: Function, isNaNorUndefined: Function, buildFindParameters: Function, buildSortParameters:
      *     Function}}
      */
-    datatablesQuery = function (Model) {
+    datatablesQueryParse = function (ModelName) {
         return {
-            run: run(Model),
+            run: run(ModelName),
             isNaNorUndefined: isNaNorUndefined,
             buildFindParameters: buildFindParameters,
             buildSortParameters: buildSortParameters,
@@ -257,4 +386,4 @@ var async = require('async'),
         };
     };
 
-module.exports = datatablesQuery;
+module.exports = datatablesQueryParse;
